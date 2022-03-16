@@ -37,6 +37,9 @@ env:
 
   # 🖊️ EDIT to set a name for your OpenShift app, or a default one will be generated below.
   APP_NAME: ""
+  JAR_NAME: ${{ needs.compile.outputs.jarname }}
+  #IMAGE_TAGS: latest ${{ needs.compile.outputs.commit_sha }}
+  
 
   # 🖊️ EDIT with the port your application should be accessible on.
   # If the container image exposes *exactly one* port, this can be left blank.
@@ -50,7 +53,7 @@ env:
   IMAGE_REGISTRY_PASSWORD: ${{ github.token }}
 
   # 🖊️ EDIT to specify custom tags for the container image, or default tags will be generated below.
-  IMAGE_TAGS: ""
+  IMAGE_TAGS: latest ${{ needs.compile.outputs.commit_sha }}
 
 on:
   # https://docs.github.com/en/actions/reference/events-that-trigger-workflows
@@ -62,7 +65,7 @@ jobs:
   openshift-ci-cd:
     name: Build and deploy to OpenShift
     # ubuntu-20.04 can also be used.
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-20.04
     environment: production
 
     outputs:
@@ -120,6 +123,17 @@ jobs:
       if: env.IMAGE_TAGS == ''
       run: |
         echo "IMAGE_TAGS=latest ${GITHUB_SHA::12}" | tee -a $GITHUB_ENV
+        
+    # Added from dockerbuild <haaike>
+    - uses: actions/download-artifact@v2
+      with:
+        name: ${{ env.JAR_NAME }}
+
+    # The dockerfile expects the jar to be under target/
+    - name: Fake target/ dir
+      run: |
+        mkdir target/
+        mv -v ${{ env.JAR_NAME }} target/
 
     # https://github.com/redhat-actions/buildah-build#readme
     - name: Build from Dockerfile
@@ -134,6 +148,8 @@ jobs:
         # Otherwise, point this to your Dockerfile/Containerfile relative to the repository root.
         dockerfiles: |
           ./Dockerfile
+        build-args:
+          jar_name=${{ env.JAR_NAME }}  
 
     # https://github.com/redhat-actions/push-to-registry#readme
     - name: Push to registry
