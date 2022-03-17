@@ -36,12 +36,12 @@ env:
   OPENSHIFT_NAMESPACE: gh-actions-test-app-1
 
   # 🖊️ EDIT to set a name for your OpenShift app, or a default one will be generated below.
-  APP_NAME: ""
+  APP_NAME: petclinic
 
   # 🖊️ EDIT with the port your application should be accessible on.
   # If the container image exposes *exactly one* port, this can be left blank.
   # Refer to the 'port' input of https://github.com/redhat-actions/oc-new-app
-  APP_PORT: ""
+  APP_PORT: 8080
 
   # 🖊️ EDIT to change the image registry settings.
   # Registries such as GHCR, Quay.io, and Docker Hub are supported.
@@ -68,7 +68,11 @@ jobs:
     outputs:
       ROUTE: ${{ steps.deploy-and-expose.outputs.route }}
       SELECTOR: ${{ steps.deploy-and-expose.outputs.selector }}
-
+      jarname: ${{ steps.get-jarname.outputs.jarname }}
+      commit_sha: ${{ steps.commit-data.outputs.short_sha }}
+    env:
+      TARGET_DIR: target/
+      MVN_REPO_DIR: ~/.m2/repository
     steps:
     - name: Check for required secrets
       uses: actions/github-script@v4
@@ -122,19 +126,86 @@ jobs:
         echo "IMAGE_TAGS=latest ${GITHUB_SHA::12}" | tee -a $GITHUB_ENV
 
     # https://github.com/redhat-actions/buildah-build#readme
-    - name: Build from Dockerfile
-      id: build-image
-      uses: redhat-actions/buildah-build@v2
-      with:
-        image: ${{ env.APP_NAME }}
-        tags: ${{ env.IMAGE_TAGS }}
+    #- name: Build from Dockerfile
+    #  id: build-image
+    #  uses: redhat-actions/buildah-build@v2
+    #  with:
+    #    image: ${{ env.APP_NAME }}
+    #    tags: ${{ env.IMAGE_TAGS }}
 
         # If you don't have a Dockerfile/Containerfile, refer to https://github.com/redhat-actions/buildah-build#scratch-build-inputs
         # Or, perform a source-to-image build using https://github.com/redhat-actions/s2i-build
         # Otherwise, point this to your Dockerfile/Containerfile relative to the repository root.
+    #    dockerfiles: |
+    #      ./Dockerfile    - name: Setup Java
+    uses: actions/setup-java@v2
+    with:
+      distribution: temurin
+      java-version: 11
+      cache: maven
+
+  - run: java -version
+
+  - run: mvn -ntp -B package
+
+  # Store the output jar into the env for reuse below.
+  # It will contain, eg. "spring-petclinic-2.3.0.BUILD-SNAPSHOT.jar"
+  - name: Get jar filename
+    id: get-jarname
+    run: |
+      export JAR_NAME="$(basename $(ls target/*.jar))"
+      echo "Petclinic jar is $JAR_NAME"
+      echo "::set-output name=jarname::$JAR_NAME"
+      echo "JAR_NAME=$JAR_NAME" >> $GITHUB_ENV
+
+  # Upload the jar for future jobs to use.
+  - uses: actions/upload-artifact@v2
+    with:
+      name: ${{ env.JAR_NAME }}
+      path: ${{ env.TARGET_DIR }}/${{ env.JAR_NAME }}
+      if-no-files-found: error
+
+  # Use the commit short-sha as the suffix of the app_name
+  - name: Get commit short-sha
+    id: commit-data
+    uses: redhat-actions/common/commit-data@v1
+
+#####################################################################################################################
+## The build and push image job builds the container image with the petclinic jar in it,
+## and pushes it to an image registry.
+## It outputs the image tag and image URL for the next step to use when deploying to the OpenShift cluster.
+build-push-image:
+  name: Docker Build
+  runs-on: ubuntu-20.04
+  needs: compile
+  env:
+    JAR_NAME: ${{ needs.compile.outputs.jarname }}
+    IMAGE_TAGS: latest ${{ needs.compile.outputs.commit_sha }}
+  steps:
+    - uses: actions/checkout@v2
+
+    # Download the jar artifact from the compile step
+    - uses: actions/download-artifact@v2
+      with:
+        name: ${{ env.JAR_NAME }}
+
+    # The dockerfile expects the jar to be under target/
+    - name: Fake target/ dir
+      run: |
+        mkdir target/
+        mv -v ${{ env.JAR_NAME }} target/
+
+    # Use buildah to build the application image with the jar inside.
+    - name: Build Image
+      uses: redhat-actions/buildah-build@v2
+      with:
+        image: ${{ env.APP_NAME }}
+        tags: ${{ env.IMAGE_TAGS }}
         dockerfiles: |
           ./Dockerfile
-
+        build-args:
+          jar_name=${{ env.JAR_NAME }}
+    
     # https://github.com/redhat-actions/push-to-registry#readme
     - name: Push to registry
       id: push-image
