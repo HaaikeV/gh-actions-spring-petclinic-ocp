@@ -53,7 +53,7 @@ env:
   IMAGE_REGISTRY_PASSWORD: ""
 
   # 🖊️ EDIT to specify custom tags for the container image, or default tags will be generated below.
-  IMAGE_TAGS: latest ${{ needs.compile.outputs.commit_sha }}
+  IMAGE_TAGS: latest
 
 on:
   # https://docs.github.com/en/actions/reference/events-that-trigger-workflows
