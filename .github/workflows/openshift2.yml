@@ -180,8 +180,8 @@ jobs:
     runs-on: ubuntu-20.04
     needs: openshift-ci-cd
     env:
-      JAR_NAME: ${{ needs.compile.outputs.jarname }}
-      IMAGE_TAGS: latest ${{ needs.compile.outputs.commit_sha }}
+      JAR_NAME: ${{ needs.openshift-ci-cd.outputs.jarname }}
+      IMAGE_TAGS: latest ${{ needs.openshift-ci-cd.outputs.commit_sha }}
     steps:
       - uses: actions/checkout@v2
 
