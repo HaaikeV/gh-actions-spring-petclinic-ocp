@@ -138,121 +138,122 @@ jobs:
         # Otherwise, point this to your Dockerfile/Containerfile relative to the repository root.
     #    dockerfiles: |
     #      ./Dockerfile    - name: Setup Java
-    uses: actions/setup-java@v2
-    with:
-      distribution: temurin
-      java-version: 11
-      cache: maven
+    - name: Setup Java
+      uses: actions/setup-java@v2
+      with:
+        distribution: temurin
+        java-version: 11
+        cache: maven
 
-  - run: java -version
+    - run: java -version
 
-  - run: mvn -ntp -B package
+    - run: mvn -ntp -B package
 
-  # Store the output jar into the env for reuse below.
-  # It will contain, eg. "spring-petclinic-2.3.0.BUILD-SNAPSHOT.jar"
-  - name: Get jar filename
-    id: get-jarname
-    run: |
-      export JAR_NAME="$(basename $(ls target/*.jar))"
-      echo "Petclinic jar is $JAR_NAME"
-      echo "::set-output name=jarname::$JAR_NAME"
-      echo "JAR_NAME=$JAR_NAME" >> $GITHUB_ENV
+    # Store the output jar into the env for reuse below.
+    # It will contain, eg. "spring-petclinic-2.3.0.BUILD-SNAPSHOT.jar"
+    - name: Get jar filename
+      id: get-jarname
+      run: |
+        export JAR_NAME="$(basename $(ls target/*.jar))"
+        echo "Petclinic jar is $JAR_NAME"
+        echo "::set-output name=jarname::$JAR_NAME"
+        echo "JAR_NAME=$JAR_NAME" >> $GITHUB_ENV
 
-  # Upload the jar for future jobs to use.
-  - uses: actions/upload-artifact@v2
-    with:
-      name: ${{ env.JAR_NAME }}
-      path: ${{ env.TARGET_DIR }}/${{ env.JAR_NAME }}
-      if-no-files-found: error
-
-  # Use the commit short-sha as the suffix of the app_name
-  - name: Get commit short-sha
-    id: commit-data
-    uses: redhat-actions/common/commit-data@v1
-
-#####################################################################################################################
-## The build and push image job builds the container image with the petclinic jar in it,
-## and pushes it to an image registry.
-## It outputs the image tag and image URL for the next step to use when deploying to the OpenShift cluster.
-build-push-image:
-  name: Docker Build
-  runs-on: ubuntu-20.04
-  needs: compile
-  env:
-    JAR_NAME: ${{ needs.compile.outputs.jarname }}
-    IMAGE_TAGS: latest ${{ needs.compile.outputs.commit_sha }}
-  steps:
-    - uses: actions/checkout@v2
-
-    # Download the jar artifact from the compile step
-    - uses: actions/download-artifact@v2
+    # Upload the jar for future jobs to use.
+    - uses: actions/upload-artifact@v2
       with:
         name: ${{ env.JAR_NAME }}
+        path: ${{ env.TARGET_DIR }}/${{ env.JAR_NAME }}
+        if-no-files-found: error
 
-    # The dockerfile expects the jar to be under target/
-    - name: Fake target/ dir
-      run: |
-        mkdir target/
-        mv -v ${{ env.JAR_NAME }} target/
+    # Use the commit short-sha as the suffix of the app_name
+    - name: Get commit short-sha
+      id: commit-data
+      uses: redhat-actions/common/commit-data@v1
 
-    # Use buildah to build the application image with the jar inside.
-    - name: Build Image
-      uses: redhat-actions/buildah-build@v2
-      with:
-        image: ${{ env.APP_NAME }}
-        tags: ${{ env.IMAGE_TAGS }}
-        dockerfiles: |
-          ./Dockerfile
-        build-args:
-          jar_name=${{ env.JAR_NAME }}
+  #####################################################################################################################
+  ## The build and push image job builds the container image with the petclinic jar in it,
+  ## and pushes it to an image registry.
+  ## It outputs the image tag and image URL for the next step to use when deploying to the OpenShift cluster.
+  build-push-image:
+    name: Docker Build
+    runs-on: ubuntu-20.04
+    needs: openshift-ci-cd
+    env:
+      JAR_NAME: ${{ needs.compile.outputs.jarname }}
+      IMAGE_TAGS: latest ${{ needs.compile.outputs.commit_sha }}
+    steps:
+      - uses: actions/checkout@v2
+
+      # Download the jar artifact from the compile step
+      - uses: actions/download-artifact@v2
+        with:
+          name: ${{ env.JAR_NAME }}
+
+      # The dockerfile expects the jar to be under target/
+      - name: Fake target/ dir
+        run: |
+          mkdir target/
+          mv -v ${{ env.JAR_NAME }} target/
+
+      # Use buildah to build the application image with the jar inside.
+      - name: Build Image
+        uses: redhat-actions/buildah-build@v2
+        with:
+          image: ${{ env.APP_NAME }}
+          tags: ${{ env.IMAGE_TAGS }}
+          dockerfiles: |
+            ./Dockerfile
+          build-args:
+            jar_name=${{ env.JAR_NAME }}
     
-    # https://github.com/redhat-actions/push-to-registry#readme
-    - name: Push to registry
-      id: push-image
-      uses: redhat-actions/push-to-registry@v2
-      with:
-        image: ${{ steps.build-image.outputs.image }}
-        tags: ${{ steps.build-image.outputs.tags }}
-        registry: ${{ env.IMAGE_REGISTRY }}
-        username: ${{ env.IMAGE_REGISTRY_USER }}
-        password: ${{ env.IMAGE_REGISTRY_PASSWORD }}
+      # https://github.com/redhat-actions/push-to-registry#readme
+      - name: Push to registry
+        id: push-image
+        uses: redhat-actions/push-to-registry@v2
+        with:
+          image: ${{ steps.build-image.outputs.image }}
+          tags: ${{ steps.build-image.outputs.tags }}
+          registry: ${{ env.IMAGE_REGISTRY }}
+          username: ${{ env.IMAGE_REGISTRY_USER }}
+          password: ${{ env.IMAGE_REGISTRY_PASSWORD }}
 
-    # The path the image was pushed to is now stored in ${{ steps.push-image.outputs.registry-path }}
+      # The path the image was pushed to is now stored in ${{ steps.push-image.outputs.registry-path }}
 
-    - name: Install oc
-      uses: redhat-actions/openshift-tools-installer@v1
-      with:
-        oc: 4
+      - name: Install oc
+        uses: redhat-actions/openshift-tools-installer@v1
+        with:
+          oc: 4
 
-    # https://github.com/redhat-actions/oc-login#readme
-    - name: Log in to OpenShift
-      uses: redhat-actions/oc-login@v1
-      with:
-        openshift_server_url: ${{ env.OPENSHIFT_SERVER }}
-        openshift_token: ${{ env.OPENSHIFT_TOKEN }}
-        insecure_skip_tls_verify: true
-        namespace: ${{ env.OPENSHIFT_NAMESPACE }}
+      # https://github.com/redhat-actions/oc-login#readme
+      - name: Log in to OpenShift
+        uses: redhat-actions/oc-login@v1
+        with:
+          openshift_server_url: ${{ env.OPENSHIFT_SERVER }}
+          openshift_token: ${{ env.OPENSHIFT_TOKEN }}
+          insecure_skip_tls_verify: true
+          namespace: ${{ env.OPENSHIFT_NAMESPACE }}
 
-    # This step should create a deployment, service, and route to run your app and expose it to the internet.
-    # https://github.com/redhat-actions/oc-new-app#readme
-    - name: Create and expose app
-      id: deploy-and-expose
-      uses: redhat-actions/oc-new-app@v1
-      with:
-        app_name: ${{ env.APP_NAME }}
-        image: ${{ steps.push-image.outputs.registry-path }}
-        namespace: ${{ env.OPENSHIFT_NAMESPACE }}
-        port: ${{ env.APP_PORT }}
+      # This step should create a deployment, service, and route to run your app and expose it to the internet.
+      # https://github.com/redhat-actions/oc-new-app#readme
+      - name: Create and expose app
+        id: deploy-and-expose
+        uses: redhat-actions/oc-new-app@v1
+        with:
+          app_name: ${{ env.APP_NAME }}
+          image: ${{ steps.push-image.outputs.registry-path }}
+          namespace: ${{ env.OPENSHIFT_NAMESPACE }}
+          port: ${{ env.APP_PORT }}
 
-    - name: Print application URL
-      env:
-        ROUTE: ${{ steps.deploy-and-expose.outputs.route }}
-        SELECTOR: ${{ steps.deploy-and-expose.outputs.selector }}
-      run: |
-        [[ -n ${{ env.ROUTE }} ]] || (echo "Determining application route failed in previous step"; exit 1)
-        echo
-        echo "======================== Your application is available at: ========================"
-        echo ${{ env.ROUTE }}
-        echo "==================================================================================="
-        echo
-        echo "Your app can be taken down with: \"oc delete all --selector='${{ env.SELECTOR }}'\""
+      - name: Print application URL
+        env:
+          ROUTE: ${{ steps.deploy-and-expose.outputs.route }}
+          SELECTOR: ${{ steps.deploy-and-expose.outputs.selector }}
+        run: |
+          [[ -n ${{ env.ROUTE }} ]] || (echo "Determining application route failed in previous step"; exit 1)
+          echo
+          echo "======================== Your application is available at: ========================"
+          echo ${{ env.ROUTE }}
+          echo "==================================================================================="
+          echo
+          echo "Your app can be taken down with: \"oc delete all --selector='${{ env.SELECTOR }}'\""
