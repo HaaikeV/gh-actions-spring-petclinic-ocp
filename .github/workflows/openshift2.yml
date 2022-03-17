@@ -50,7 +50,7 @@ env:
   IMAGE_REGISTRY_PASSWORD: ${{ secrets.IMAGE_REGISTRY_PASSWORD }}
 
   # 🖊️ EDIT to specify custom tags for the container image, or default tags will be generated below.
-  IMAGE_TAGS: latest
+  IMAGE_TAGS: latest ${{ github.sha }}
 
 on:
   # https://docs.github.com/en/actions/reference/events-that-trigger-workflows
@@ -198,6 +198,7 @@ jobs:
 
       # Use buildah to build the application image with the jar inside.
       - name: Build Image
+        id: build_image
         uses: redhat-actions/buildah-build@v2
         with:
           image: ${{ env.APP_NAME }}
@@ -212,11 +213,13 @@ jobs:
         id: push-image
         uses: redhat-actions/push-to-registry@v2
         with:
-          image: ${{ env.APP_NAME }}
-          tags: ${{ env.IMAGE_TAGS }}
+          image: ${{ steps.build_image.outputs.image }}
+          tags: ${{ steps.build_image.outputs.tags }}
           registry: ${{ env.IMAGE_REGISTRY }}
           username: ${{ env.IMAGE_REGISTRY_USER }}
           password: ${{ env.IMAGE_REGISTRY_PASSWORD }}
+          extra-args: |
+            --disable-content-trust
 
       # The path the image was pushed to is now stored in ${{ steps.push-image.outputs.registry-path }}
 
